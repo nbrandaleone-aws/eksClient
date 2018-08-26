@@ -1,4 +1,14 @@
 /*
+Nick Brandaleone
+August 2018
+
+This code demonstates how to interact with an Elastic Kubernetes Service, using an AWS Lambda function.
+This supports the following blog entry: http://www.nickaws.net/aws/2018/08/26/Interacting-with-EKS-via-Lambda.html
+
+Parts of the code leverages the Kubernetes Go client, and the AWS Go SDK/AWS Go Lambda SDK.
+*/
+
+/*
 Copyright 2016 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
@@ -58,7 +68,7 @@ func getClusterInfo() (string, string, string) {
 		panic("unable to load SDK config, " + err.Error())
 	}
 
-  // Get the region and cluster name from env variables
+  // Get the region and cluster name from env variables. Hard-coded for now.
   // See https://docs.aws.amazon.com/sdk-for-go/api/aws/endpoints/#pkg-constants
 	cfg.Region = endpoints.UsWest2RegionID
   svc := eks.New(cfg)
@@ -66,6 +76,8 @@ func getClusterInfo() (string, string, string) {
   		Name: aws.String("eks"),
   	}
 
+  // Prepare request to EKS endpoint
+  // Code from: https://github.com/aws/aws-sdk-go/blob/master/service/eks/examples_test.go
   req := svc.DescribeClusterRequest(input)
   result, err := req.Send()
   if err != nil {
@@ -115,7 +127,7 @@ func getAuthenticator() {
 }
 
 func buildConfig(){
-// This function creates a KUBECONFIG file, using a template structure.
+// This function creates a KUBECONFIG file, using a template structure
   
   t := template.New("KUBECONFIG")
   text := `
@@ -150,7 +162,6 @@ users:
   t, err := t.Parse(text)
   check(err)
   
-  // get cluster details
   type EKSConfig struct {
     Name string
     Role string
@@ -158,10 +169,11 @@ users:
     CertificateAuthority string
   }
   
+  // Get EKS cluster details. TODO: Error checking
   n, e, ca := getClusterInfo()
   config := EKSConfig{n, "arn:aws:iam::991225764181:role/KubernetesAdmin", e, ca}
     
-  // Open a new file for writing only
+  // Open a new file for reading/writing only
   file, err := os.OpenFile(
       "/tmp/KUBECONFIG",
       os.O_WRONLY|os.O_TRUNC|os.O_CREATE,
