@@ -188,7 +188,7 @@ users:
   check(err)
 }
 
-
+// https://github.com/kubernetes/client-go/blob/master/examples/out-of-cluster-client-configuration/main.go
 func LambdaHandler() {
   getAuthenticator()
   buildConfig()
