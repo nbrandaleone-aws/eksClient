@@ -33,16 +33,16 @@ import (
 	"os"
 	"path/filepath"
 	"time"
-  
-  "log"
-  "net/http"
-  "io/ioutil"
-  "text/template"
-  
-  "github.com/aws/aws-lambda-go/lambda"
+
+	"io/ioutil"
+	"log"
+	"net/http"
+	"text/template"
+
+	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/aws/awserr"
 	"github.com/aws/aws-sdk-go-v2/aws/endpoints"
-  "github.com/aws/aws-sdk-go-v2/aws/awserr"
 	"github.com/aws/aws-sdk-go-v2/aws/external"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
 
@@ -52,11 +52,10 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
-
-func check(e error){
-  if e != nil {
-    log.Fatalln(e)
-  }
+func check(e error) {
+	if e != nil {
+		log.Fatalln(e)
+	}
 }
 
 func getClusterInfo() (string, string, string) {
@@ -68,69 +67,69 @@ func getClusterInfo() (string, string, string) {
 		panic("unable to load SDK config, " + err.Error())
 	}
 
-  // Get the region and cluster name from env variables. Hard-coded for now.
-  // See https://docs.aws.amazon.com/sdk-for-go/api/aws/endpoints/#pkg-constants
+	// Get the region and cluster name from env variables. Hard-coded for now.
+	// See https://docs.aws.amazon.com/sdk-for-go/api/aws/endpoints/#pkg-constants
 	cfg.Region = endpoints.UsWest2RegionID
-  svc := eks.New(cfg)
-  	input := &eks.DescribeClusterInput{
-  		Name: aws.String("eks"),
-  	}
+	svc := eks.New(cfg)
+	input := &eks.DescribeClusterInput{
+		Name: aws.String("eks"),
+	}
 
-  // Prepare request to EKS endpoint
-  // Code from: https://github.com/aws/aws-sdk-go/blob/master/service/eks/examples_test.go
-  req := svc.DescribeClusterRequest(input)
-  result, err := req.Send()
-  if err != nil {
-  	if aerr, ok := err.(awserr.Error); ok {
-  			switch aerr.Code() {
-  			case eks.ErrCodeResourceNotFoundException:
-  				fmt.Println(eks.ErrCodeResourceNotFoundException, aerr.Error())
-  			case eks.ErrCodeClientException:
-  				fmt.Println(eks.ErrCodeClientException, aerr.Error())
-  			case eks.ErrCodeServerException:
-  				fmt.Println(eks.ErrCodeServerException, aerr.Error())
-  			case eks.ErrCodeServiceUnavailableException:
-  				fmt.Println(eks.ErrCodeServiceUnavailableException, aerr.Error())
-  			default:
-  				fmt.Println(aerr.Error())
-  			} // switch
-  	} else {
-  		// Print the error, cast err to awserr.Error to get the Code and
-  		// Message from an error.
-  		fmt.Println(err.Error())
-  	}
-  //return
-  panic("a problem")
-  }
+	// Prepare request to EKS endpoint
+	// Code from: https://github.com/aws/aws-sdk-go/blob/master/service/eks/examples_test.go
+	req := svc.DescribeClusterRequest(input)
+	result, err := req.Send()
+	if err != nil {
+		if aerr, ok := err.(awserr.Error); ok {
+			switch aerr.Code() {
+			case eks.ErrCodeResourceNotFoundException:
+				fmt.Println(eks.ErrCodeResourceNotFoundException, aerr.Error())
+			case eks.ErrCodeClientException:
+				fmt.Println(eks.ErrCodeClientException, aerr.Error())
+			case eks.ErrCodeServerException:
+				fmt.Println(eks.ErrCodeServerException, aerr.Error())
+			case eks.ErrCodeServiceUnavailableException:
+				fmt.Println(eks.ErrCodeServiceUnavailableException, aerr.Error())
+			default:
+				fmt.Println(aerr.Error())
+			} // switch
+		} else {
+			// Print the error, cast err to awserr.Error to get the Code and
+			// Message from an error.
+			fmt.Println(err.Error())
+		}
+		//return
+		panic("a problem")
+	}
 
-  return *result.Cluster.Name, *result.Cluster.Endpoint, *result.Cluster.CertificateAuthority.Data
+	return *result.Cluster.Name, *result.Cluster.Endpoint, *result.Cluster.CertificateAuthority.Data
 }
 
 func getAuthenticator() {
-// This function gets the "aws-iam-authenticator" binary, and installs it in /tmp
+	// This function gets the "aws-iam-authenticator" binary, and installs it in /tmp
 
-  const authURL = "https://amazon-eks.s3-us-west-2.amazonaws.com/1.10.3/2018-07-26/bin/linux/amd64/aws-iam-authenticator"
-  var netClient = &http.Client{
-    Timeout: time.Second * 10,
-  }  
-  
-  resp, err := netClient.Get(authURL)
-  check(err)
+	const authURL = "https://amazon-eks.s3-us-west-2.amazonaws.com/1.10.3/2018-07-26/bin/linux/amd64/aws-iam-authenticator"
+	var netClient = &http.Client{
+		Timeout: time.Second * 10,
+	}
 
-  defer resp.Body.Close()
-  body, err := ioutil.ReadAll(resp.Body)
-  check(err)
-  
-  // write binary to /tmp
-  err = ioutil.WriteFile("/tmp/aws-iam-authenticator", body, 0755)
-  check(err)
+	resp, err := netClient.Get(authURL)
+	check(err)
+
+	defer resp.Body.Close()
+	body, err := ioutil.ReadAll(resp.Body)
+	check(err)
+
+	// write binary to /tmp
+	err = ioutil.WriteFile("/tmp/aws-iam-authenticator", body, 0755)
+	check(err)
 }
 
-func buildConfig(){
-// This function creates a KUBECONFIG file, using a template structure
-  
-  t := template.New("KUBECONFIG")
-  text := `
+func buildConfig() {
+	// This function creates a KUBECONFIG file, using a template structure
+
+	t := template.New("KUBECONFIG")
+	text := `
 apiVersion: v1
 clusters:
 - cluster:
@@ -159,40 +158,40 @@ users:
         - "{{.Role}}"
 `
 
-  t, err := t.Parse(text)
-  check(err)
-  
-  type EKSConfig struct {
-    Name string
-    Role string
-    Server string
-    CertificateAuthority string
-  }
-  
-  // Get EKS cluster details. TODO: Error checking
-  n, e, ca := getClusterInfo()
-  config := EKSConfig{n, "arn:aws:iam::991225764181:role/KubernetesAdmin", e, ca}
-    
-  // Open a new file for reading/writing only
-  file, err := os.OpenFile(
-      "/tmp/KUBECONFIG",
-      os.O_WRONLY|os.O_TRUNC|os.O_CREATE,
-      0666,
-  )
-  check(err)
-  defer file.Close()
-  
-  // Write kubectl configuration file to /tmp
-  //err = t.Execute(os.Stdout, config)
-  err = t.Execute(file, config)
-  check(err)
+	t, err := t.Parse(text)
+	check(err)
+
+	type EKSConfig struct {
+		Name                 string
+		Role                 string
+		Server               string
+		CertificateAuthority string
+	}
+
+	// Get EKS cluster details. TODO: Error checking
+	n, e, ca := getClusterInfo()
+	config := EKSConfig{n, "arn:aws:iam::991225764181:role/KubernetesAdmin", e, ca}
+
+	// Open a new file for reading/writing only
+	file, err := os.OpenFile(
+		"/tmp/KUBECONFIG",
+		os.O_WRONLY|os.O_TRUNC|os.O_CREATE,
+		0666,
+	)
+	check(err)
+	defer file.Close()
+
+	// Write kubectl configuration file to /tmp
+	//err = t.Execute(os.Stdout, config)
+	err = t.Execute(file, config)
+	check(err)
 }
 
 // https://github.com/kubernetes/client-go/blob/master/examples/out-of-cluster-client-configuration/main.go
 func LambdaHandler() {
-  getAuthenticator()
-  buildConfig()
-  
+	getAuthenticator()
+	buildConfig()
+
 	var kubeconfig *string
 	kubeconfig = flag.String("kubeconfig", filepath.Join("/tmp", "KUBECONFIG"), "(optional) absolute path to the kubeconfig file")
 	flag.Parse()
@@ -209,10 +208,10 @@ func LambdaHandler() {
 		panic(err.Error())
 	}
 
-		pods, err := clientset.CoreV1().Pods("").List(metav1.ListOptions{})
-		if err != nil {
-			panic(err.Error())
-		}
+	pods, err := clientset.CoreV1().Pods("").List(metav1.ListOptions{})
+	if err != nil {
+		panic(err.Error())
+	}
 	fmt.Printf("There are %d pods in the cluster\n", len(pods.Items))
 
 	// Examples for error handling:
@@ -234,5 +233,5 @@ func LambdaHandler() {
 }
 
 func main() {
-  lambda.Start(LambdaHandler)
+	lambda.Start(LambdaHandler)
 }
