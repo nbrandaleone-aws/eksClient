@@ -6,6 +6,7 @@ This code demonstates how to interact with an Elastic Kubernetes Service, using 
 This supports the following blog entry: http://www.nickaws.net/aws/2018/08/26/Interacting-with-EKS-via-Lambda.html
 
 Parts of the code leverages the Kubernetes Go client, and the AWS Go SDK/AWS Go Lambda SDK.
+https://github.com/kubernetes/client-go/blob/master/examples/out-of-cluster-client-configuration/main.go
 */
 
 /*
@@ -28,29 +29,30 @@ limitations under the License.
 package main
 
 import (
-	"flag"
+	"encoding/base64"
 	"fmt"
-	"os"
-	"path/filepath"
-	"time"
-
-	"io/ioutil"
 	"log"
-	"net/http"
-	"text/template"
+	"os"
 
 	"github.com/aws/aws-lambda-go/lambda"
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/aws/awserr"
-	"github.com/aws/aws-sdk-go-v2/aws/endpoints"
-	"github.com/aws/aws-sdk-go-v2/aws/external"
-	"github.com/aws/aws-sdk-go-v2/service/eks"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/awserr"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/eks"
 
+	"github.com/kubernetes-sigs/aws-iam-authenticator/pkg/token"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/rest"
 )
+
+type Cluster struct {
+	Name     string
+	Endpoint string
+	CA       []byte
+	Role     string
+}
 
 func check(e error) {
 	if e != nil {
@@ -58,27 +60,14 @@ func check(e error) {
 	}
 }
 
-func getClusterInfo() (string, string, string) {
-	// Using the SDK's default configuration, loading additional config
-	// and credentials values from the environment variables, shared
-	// credentials, and shared configuration files
-	cfg, err := external.LoadDefaultAWSConfig()
-	if err != nil {
-		panic("unable to load SDK config, " + err.Error())
-	}
-
-	// Get the region and cluster name from env variables. Hard-coded for now.
-	// See https://docs.aws.amazon.com/sdk-for-go/api/aws/endpoints/#pkg-constants
-	cfg.Region = endpoints.UsWest2RegionID
-	svc := eks.New(cfg)
+func getClusterDetails(name string, role string, region string) (*Cluster, error) {
+	sess, err := session.NewSession(&aws.Config{Region: aws.String(region)})
+	svc := eks.New(sess)
 	input := &eks.DescribeClusterInput{
-		Name: aws.String("eks"),
+		Name: aws.String(name),
 	}
 
-	// Prepare request to EKS endpoint
-	// Code from: https://github.com/aws/aws-sdk-go/blob/master/service/eks/examples_test.go
-	req := svc.DescribeClusterRequest(input)
-	result, err := req.Send()
+	result, err := svc.DescribeCluster(input)
 	if err != nil {
 		if aerr, ok := err.(awserr.Error); ok {
 			switch aerr.Code() {
@@ -92,122 +81,88 @@ func getClusterInfo() (string, string, string) {
 				fmt.Println(eks.ErrCodeServiceUnavailableException, aerr.Error())
 			default:
 				fmt.Println(aerr.Error())
-			} // switch
+			}
 		} else {
 			// Print the error, cast err to awserr.Error to get the Code and
 			// Message from an error.
 			fmt.Println(err.Error())
 		}
-		//return
-		panic("a problem")
+		return nil, err
+	}
+	// fmt.Println(result)
+
+	// The CA data comes base64 encoded string inside a JSON object { "Data": "..." }
+	ca, err := base64.StdEncoding.DecodeString(*result.Cluster.CertificateAuthority.Data)
+	if err != nil {
+		return nil, err
 	}
 
-	return *result.Cluster.Name, *result.Cluster.Endpoint, *result.Cluster.CertificateAuthority.Data
+	return &Cluster{
+		Name:     *result.Cluster.Name,
+		Endpoint: *result.Cluster.Endpoint,
+		CA:       ca,
+		Role:     role,
+	}, nil
 }
 
-func getAuthenticator() {
-	// This function gets the "aws-iam-authenticator" binary, and installs it in /tmp
+func (c *Cluster) AuthToken() (string, error) {
 
-	const authURL = "https://amazon-eks.s3-us-west-2.amazonaws.com/1.10.3/2018-07-26/bin/linux/amd64/aws-iam-authenticator"
-	var netClient = &http.Client{
-		Timeout: time.Second * 10,
+	// Init a new aws-iam-authenticator token generator
+	gen, err := token.NewGenerator(false)
+	if err != nil {
+		return "", err
 	}
 
-	resp, err := netClient.Get(authURL)
-	check(err)
-
-	defer resp.Body.Close()
-	body, err := ioutil.ReadAll(resp.Body)
-	check(err)
-
-	// write binary to /tmp
-	err = ioutil.WriteFile("/tmp/aws-iam-authenticator", body, 0755)
-	check(err)
-}
-
-func buildConfig() {
-	// This function creates a KUBECONFIG file, using a template structure
-
-	t := template.New("KUBECONFIG")
-	text := `
-apiVersion: v1
-clusters:
-- cluster:
-    server: {{.Server}}
-    certificate-authority-data: {{.CertificateAuthority}}
-  name: kubernetes
-contexts:
-- context:
-    cluster: kubernetes
-    user: aws
-  name: aws
-current-context: aws
-kind: Config
-preferences: {}
-users:
-- name: aws
-  user:
-    exec:
-      apiVersion: client.authentication.k8s.io/v1alpha1
-      command: /tmp/aws-iam-authenticator
-      args:
-        - "token"
-        - "-i"
-        - "{{.Name}}"
-        - "-r"
-        - "{{.Role}}"
-`
-
-	t, err := t.Parse(text)
-	check(err)
-
-	type EKSConfig struct {
-		Name                 string
-		Role                 string
-		Server               string
-		CertificateAuthority string
+	// Use the current IAM credentials to obtain a K8s bearer token
+	tok, err := gen.GetWithRole(c.Name, c.Role)
+	if err != nil {
+		return "", err
 	}
 
-	// Get EKS cluster details. TODO: Error checking
-	n, e, ca := getClusterInfo()
-	config := EKSConfig{n, "arn:aws:iam::991225764181:role/KubernetesAdmin", e, ca}
-
-	// Open a new file for reading/writing only
-	file, err := os.OpenFile(
-		"/tmp/KUBECONFIG",
-		os.O_WRONLY|os.O_TRUNC|os.O_CREATE,
-		0666,
-	)
-	check(err)
-	defer file.Close()
-
-	// Write kubectl configuration file to /tmp
-	//err = t.Execute(os.Stdout, config)
-	err = t.Execute(file, config)
-	check(err)
+	return tok, nil
 }
 
-// https://github.com/kubernetes/client-go/blob/master/examples/out-of-cluster-client-configuration/main.go
 func LambdaHandler() {
-	getAuthenticator()
-	buildConfig()
-
-	var kubeconfig *string
-	kubeconfig = flag.String("kubeconfig", filepath.Join("/tmp", "KUBECONFIG"), "(optional) absolute path to the kubeconfig file")
-	flag.Parse()
-
-	// use the current context in kubeconfig
-	config, err := clientcmd.BuildConfigFromFlags("", *kubeconfig)
-	if err != nil {
-		panic(err.Error())
+	// Capture ENV variables
+	name := os.Getenv("cluster")
+	if len(name) < 1 {
+		panic("Unable to grab cluster name from ENVIRONMENT variable")
+	}
+	role := os.Getenv("arn")
+	if len(role) < 1 {
+		panic("Unable to grab role ARN from ENVIRONMENT variable")
+	}
+	// Get Region info from ENV or lambda env
+	var region string
+	region = os.Getenv("region")
+	if len(region) < 1 {
+		region = os.Getenv("AWS_REGION")
 	}
 
-	// create the clientset
-	clientset, err := kubernetes.NewForConfig(config)
+	// Get EKS cluster details
+	cluster, err := getClusterDetails(name, role, region)
+	fmt.Printf("Amazon EKS Cluster: %s (%s)\n", cluster.Name, cluster.Endpoint)
+
+	// Use the aws-iam-authenticator to fetch a K8s authentication bearer token
+	token, err := cluster.AuthToken()
 	if err != nil {
-		panic(err.Error())
+		panic("Failed to obtain token from aws-iam-authenticator, " + err.Error())
+	}
+	// fmt.Printf("Bearer Token: %s\n", token)
+
+	// Create a new K8s client set using the Amazon EKS cluster details
+	clientset, err := kubernetes.NewForConfig(&rest.Config{
+		Host:        cluster.Endpoint,
+		BearerToken: token,
+		TLSClientConfig: rest.TLSClientConfig{
+			CAData: cluster.CA,
+		},
+	})
+	if err != nil {
+		panic("Failed to create new k8s client, " + err.Error())
 	}
 
+	// Now, call kubernetes cluster API server
 	pods, err := clientset.CoreV1().Pods("").List(metav1.ListOptions{})
 	if err != nil {
 		panic(err.Error())
