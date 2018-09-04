@@ -5,7 +5,7 @@ REGION = us-east-1
 .phony: clean
 
 clean:
-	rm -f main main.zip
+	rm -f main main.zip -
 
 build:
 	GOOS=linux GOARCH=amd64 go build -o main main.go
@@ -31,7 +31,8 @@ config:
 		--runtime go1.x \
 		--timeout 30 \
 		--memory-size 256 \
-		--environment Variables="{cluster=eks,region=us-west-2}"
+		--environment Variables="{cluster=devel,region=us-west-2,arn=arn:aws:iam::991225764181:role/KubernetesAdmin}"
+
 update:
 	aws lambda update-function-code \
 		--function-name $(FUNCTION) \
